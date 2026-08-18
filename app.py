@@ -12,6 +12,7 @@ st.set_page_config(page_title="Dashboard Analítico - Metas", layout="wide", ini
 def carregar_dados():
     base_path = "data"
     
+    # 1. Ingestão (Lendo os dados do repositório)
     df_fat = pd.read_excel(os.path.join(base_path, "faturamento_realizado.xlsx"))
     df_meta = pd.read_excel(os.path.join(base_path, "meta_faturamento.xlsx"))
     df_rca = pd.read_excel(os.path.join(base_path, "dim_rca.xlsx"))
@@ -20,9 +21,12 @@ def carregar_dados():
     df_meta_televendas = pd.read_excel(os.path.join(base_path, "meta_faturamento_televendas.xlsx"))
     df_televendas = pd.read_excel(os.path.join(base_path, "dim_televendas.xlsx"))
     
+    # 2. Sanitização de Esquema (Data Quality)
+    # Adicionamos str() e .strip() para evitar erros com caracteres invisíveis
     for df in [df_fat, df_meta, df_rca, df_filial, df_supervisor, df_meta_televendas, df_televendas]:
-        df.columns = [c.lower() for c in df.columns]
+        df.columns = [str(c).strip().lower() for c in df.columns]
         
+    # 3. Tratamento de Renomeações Padrão
     if 'cod_telenvenda' in df_fat.columns:
         df_fat.rename(columns={'cod_telenvenda': 'cod_televenda'}, inplace=True)
         
@@ -30,7 +34,23 @@ def carregar_dados():
         'cod_televendas': 'cod_televenda',
         'valor_mea_televendas': 'valor_meta'
     }, inplace=True)
+    
+    # ==========================================
+    # 🚨 DATA CONTRACT VALIDATION (Fail-Fast)
+    # ==========================================
+    # Valida se as colunas essenciais para o motor de regras existem
+    colunas_esperadas_fat = ['origempedido', 'valor_venda_mes', 'data', 'cod_rca']
+    colunas_ausentes = [col for col in colunas_esperadas_fat if col not in df_fat.columns]
+    
+    if colunas_ausentes:
+        st.error("### 🚨 Quebra de Contrato de Dados Detectada")
+        st.error(f"As seguintes colunas não foram encontradas no pipeline de faturamento: **{colunas_ausentes}**")
+        st.warning(f"**Colunas disponíveis no arquivo atual:** {df_fat.columns.tolist()}")
+        st.info("💡 Ação recomendada: Force uma nova execução da DAG no Airflow para sobrescrever o arquivo com a query SQL mais recente.")
+        st.stop() # Interrompe a execução do Streamlit graciosamente sem gerar Traceback
+    # ==========================================
         
+    # 4. Transformação Temporal
     df_fat['data'] = pd.to_datetime(df_fat['data']).dt.to_period('M')
     df_meta['data'] = pd.to_datetime(df_meta['data']).dt.to_period('M')
     df_meta_televendas['data'] = pd.to_datetime(df_meta_televendas['data']).dt.to_period('M')
