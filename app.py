@@ -21,8 +21,7 @@ def carregar_dados():
     df_meta_televendas = pd.read_excel(os.path.join(base_path, "meta_faturamento_televendas.xlsx"))
     df_televendas = pd.read_excel(os.path.join(base_path, "dim_televendas.xlsx"))
     
-    # 2. Sanitização de Esquema (Data Quality)
-    # Adicionamos str() e .strip() para evitar erros com caracteres invisíveis
+    # 2. Sanitização de Nomes das Colunas
     for df in [df_fat, df_meta, df_rca, df_filial, df_supervisor, df_meta_televendas, df_televendas]:
         df.columns = [str(c).strip().lower() for c in df.columns]
         
@@ -34,11 +33,30 @@ def carregar_dados():
         'cod_televendas': 'cod_televenda',
         'valor_mea_televendas': 'valor_meta'
     }, inplace=True)
+
+    # Garante que a tabela de RCA também tenha o nome padronizado para o processar_kpis
+    if 'valor_meta_acumulado' in df_meta.columns:
+        df_meta.rename(columns={'valor_meta_acumulado': 'valor_meta'}, inplace=True)
     
     # ==========================================
-    # 🚨 DATA CONTRACT VALIDATION (Fail-Fast)
+    # 🛡️ DATA QUALITY & TYPE CASTING
     # ==========================================
-    # Valida se as colunas essenciais para o motor de regras existem
+    if 'origempedido' in df_fat.columns:
+        df_fat['origempedido'] = df_fat['origempedido'].astype(str).str.strip().str.upper()
+
+    def sanitizar_chave(df, coluna):
+        if coluna in df.columns:
+            df[coluna] = df[coluna].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+
+    sanitizar_chave(df_fat, 'cod_rca')
+    sanitizar_chave(df_fat, 'cod_televenda')
+    sanitizar_chave(df_meta, 'cod_rca')
+    sanitizar_chave(df_rca, 'cod_rca')
+    sanitizar_chave(df_meta_televendas, 'cod_televenda')
+    sanitizar_chave(df_televendas, 'cod_televenda')
+    # ==========================================
+
+    # 4. DATA CONTRACT VALIDATION 
     colunas_esperadas_fat = ['origempedido', 'valor_venda_mes', 'data', 'cod_rca']
     colunas_ausentes = [col for col in colunas_esperadas_fat if col not in df_fat.columns]
     
@@ -46,11 +64,10 @@ def carregar_dados():
         st.error("### 🚨 Quebra de Contrato de Dados Detectada")
         st.error(f"As seguintes colunas não foram encontradas no pipeline de faturamento: **{colunas_ausentes}**")
         st.warning(f"**Colunas disponíveis no arquivo atual:** {df_fat.columns.tolist()}")
-        st.info("💡 Ação recomendada: Force uma nova execução da DAG no Airflow para sobrescrever o arquivo com a query SQL mais recente.")
-        st.stop() # Interrompe a execução do Streamlit graciosamente sem gerar Traceback
-    # ==========================================
+        st.info("💡 Ação recomendada: Force uma nova execução da extração para sobrescrever o arquivo com a query SQL mais recente.")
+        st.stop()
         
-    # 4. Transformação Temporal
+    # 5. Transformação Temporal
     df_fat['data'] = pd.to_datetime(df_fat['data']).dt.to_period('M')
     df_meta['data'] = pd.to_datetime(df_meta['data']).dt.to_period('M')
     df_meta_televendas['data'] = pd.to_datetime(df_meta_televendas['data']).dt.to_period('M')
@@ -131,7 +148,6 @@ def gerar_html_resumo(df_acumulado):
     
     html = f"{css}<div class='kpi-grid'>"
     
-
     df_ordenado = df_acumulado.sort_values(by='filial_kpi')
     
     for filial, group in df_ordenado.groupby('filial_kpi'):
@@ -307,40 +323,53 @@ def main():
     lista_filiais = sorted(df_filial['codfilial'].dropna().astype(int).unique().tolist())
     visao = st.session_state.visao_ativa
 
+    # Define qual tabela de meta será a base e extrai os meses dinamicamente
+    df_meta_base = df_meta if visao == "RCA" else df_meta_tv
+    lista_meses = sorted(list(set(df_meta_base['data'].astype(str).unique()) | set(df_fat['data'].astype(str).unique())))
+
     if visao == "RCA":
-        col_f1, col_f2, col_f3 = st.columns(3)
+        # 4 Colunas para encaixar o filtro de Mês
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1: filiais_selecionadas = st.multiselect("📌 Filial (Código)", lista_filiais)
-        with col_f2: sups_selecionados = st.multiselect("👥 Supervisor", sorted(df_supervisor['nm_supervisor'].dropna().unique().tolist()))
-        with col_f3: rcas_selecionados = st.multiselect("💼 RCA", sorted(df_rca['nm_rca'].dropna().unique().tolist()))
+        with col_f2: meses_selecionados = st.multiselect("📅 Mês", lista_meses)
+        with col_f3: sups_selecionados = st.multiselect("👥 Supervisor", sorted(df_supervisor['nm_supervisor'].dropna().unique().tolist()))
+        with col_f4: rcas_selecionados = st.multiselect("💼 RCA", sorted(df_rca['nm_rca'].dropna().unique().tolist()))
             
         df_dim_filtrada = df_rca.copy()
         
         if filiais_selecionadas: df_dim_filtrada = df_dim_filtrada[df_dim_filtrada['cod_filial'].isin(filiais_selecionadas)]
         if sups_selecionados: df_dim_filtrada = df_dim_filtrada[df_dim_filtrada['cod_supervisor'].isin(df_supervisor[df_supervisor['nm_supervisor'].isin(sups_selecionados)]['cod_supervisor'].tolist())]
         if rcas_selecionados: df_dim_filtrada = df_dim_filtrada[df_dim_filtrada['nm_rca'].isin(rcas_selecionados)]
-        df_meta_atual = df_meta
+        df_meta_atual = df_meta_base.copy()
         
     else: 
-        col_f1, col_f2 = st.columns(2)
+        # 3 Colunas para encaixar o filtro de Mês no Televendas
+        col_f1, col_f2, col_f3 = st.columns(3)
         with col_f1: filiais_selecionadas = st.multiselect("📌 Filial (Código)", lista_filiais)
-        with col_f2: tvs_selecionados = st.multiselect("🎧 Operador de Televendas", sorted(df_televendas['nm_televenda'].dropna().unique().tolist()))
+        with col_f2: meses_selecionados = st.multiselect("📅 Mês", lista_meses)
+        with col_f3: tvs_selecionados = st.multiselect("🎧 Operador de Televendas", sorted(df_televendas['nm_televenda'].dropna().unique().tolist()))
             
         df_dim_filtrada = df_televendas.copy()
         
         if filiais_selecionadas: df_dim_filtrada = df_dim_filtrada[df_dim_filtrada['filial'].isin(filiais_selecionadas)]
         if tvs_selecionados: df_dim_filtrada = df_dim_filtrada[df_dim_filtrada['nm_televenda'].isin(tvs_selecionados)]
-        df_meta_atual = df_meta_tv
+        df_meta_atual = df_meta_base.copy()
+
+    # Aplica o Filtro de Mês no Fato e na Meta antes de ir pro ETL (Performance)
+    df_fat_filtrado = df_fat.copy()
+    if meses_selecionados:
+        df_fat_filtrado = df_fat_filtrado[df_fat_filtrado['data'].astype(str).isin(meses_selecionados)]
+        df_meta_atual = df_meta_atual[df_meta_atual['data'].astype(str).isin(meses_selecionados)]
 
     st.markdown("---")
 
     # ------------------ COMPUTAÇÃO & NAVEGAÇÃO ------------------
     with st.spinner(f"Processando modelo de dados para a visão {visao}..."):
-        df_kpi = processar_kpis(df_fat, df_meta_atual, df_dim_filtrada, visao)
+        df_kpi = processar_kpis(df_fat_filtrado, df_meta_atual, df_dim_filtrada, visao)
     
     if df_kpi.empty:
         st.warning("⚠️ Nenhum dado encontrado para os filtros selecionados ou nenhuma meta cadastrada neste contexto.")
     else:
-        # Prepara o DataFrame Acumulado preservando a Filial para os Cards
         df_acumulado = df_kpi.groupby(['nome_entidade', 'filial_kpi']).agg(
             meta_total=('valor_meta', 'sum'),
             fat_total=('valor_venda_mes', 'sum')
@@ -349,8 +378,6 @@ def main():
         df_acumulado['atingimento'] = df_acumulado.apply(
             lambda row: row['fat_total'] / row['meta_total'] if row['meta_total'] > 0 else 0, axis=1
         )
-        
-        # Ordenação Global para o Ranking
         df_acumulado = df_acumulado.sort_values(by='atingimento', ascending=False).reset_index(drop=True)
 
         tab_resumo, tab_mensal, tab_ranking = st.tabs([
