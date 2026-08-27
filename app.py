@@ -78,6 +78,10 @@ def carregar_dados():
 # 2. Motor de Regras de Negócio (ETL)
 # ==========================================
 def processar_kpis(df_fat, df_meta_atual, df_dim_atual, visao):
+    # Garante que não existam espaços em branco e padroniza para maiúsculo
+    if 'origempedido' in df_fat.columns:
+        df_fat['origempedido'] = df_fat['origempedido'].astype(str).str.strip().str.upper()
+        
     if visao == "RCA":
         origens_validas = ['FORÇA DE VENDAS', 'OPERADOR LOGÍSTICO', 'E-COMMERCE', 'PEDIDO ELETRÔNICO']
         fat_filtrado = df_fat[df_fat['origempedido'].isin(origens_validas)]
@@ -89,9 +93,47 @@ def processar_kpis(df_fat, df_meta_atual, df_dim_atual, visao):
         chave = 'cod_televenda'
         nome_col = 'nm_televenda'
 
+    # Tipagem blindada (Força tudo para string e arranca casas decimais fantasmas do Excel)
+    fat_filtrado = fat_filtrado.copy()
+    df_meta_atual = df_meta_atual.copy()
+    df_dim_atual = df_dim_atual.copy()
+    
+    fat_filtrado[chave] = fat_filtrado[chave].astype(str).str.replace(r'\.0$', '', regex=True)
+    df_meta_atual[chave] = df_meta_atual[chave].astype(str).str.replace(r'\.0$', '', regex=True)
+    df_dim_atual[chave] = df_dim_atual[chave].astype(str).str.replace(r'\.0$', '', regex=True)
+
     fat_agg = fat_filtrado.groupby([chave, 'data'])['valor_venda_mes'].sum().reset_index()
     meta_agg = df_meta_atual.groupby([chave, 'data'])['valor_meta'].sum().reset_index()
     
+    # # ------------------------------------------------------------------
+    # # 🛠️ MOTOR DE AUTO-DIAGNÓSTICO VISUAL
+    # # ------------------------------------------------------------------
+    # if visao == "TELEVENDAS":
+    #     with st.expander("🛠️ AUTO-DIAGNÓSTICO: Por que o Faturamento está R$ 0,00?", expanded=True):
+    #         if fat_filtrado.empty:
+    #             st.error("❌ ERRO 1 (Origem): Nenhuma venda encontrada. A coluna 'origempedido' não contém 'TELEMARKETING'.")
+    #             st.write("**Origens disponíveis na sua base:**", df_fat['origempedido'].unique().tolist())
+    #         else:
+    #             st.success(f"✅ Vendas encontradas para TELEMARKETING: {len(fat_filtrado)} registros.")
+                
+    #             meses_fat = list(fat_agg['data'].astype(str).unique())
+    #             meses_meta = list(meta_agg['data'].astype(str).unique())
+    #             if not any(m in meses_meta for m in meses_fat):
+    #                 st.error(f"❌ ERRO 2 (Data): As datas não se cruzam! Faturamento tem os meses {meses_fat}, mas a Meta cadastrada está em {meses_meta}.")
+    #             else:
+    #                 st.success(f"✅ Meses de Meta e Faturamento alinhados.")
+                    
+    #             chaves_fat = set(fat_agg[chave].unique())
+    #             chaves_meta = set(meta_agg[chave].unique())
+    #             chaves_comuns = chaves_fat.intersection(chaves_meta)
+    #             if not chaves_comuns:
+    #                 st.error("❌ ERRO 3 (Chaves): Os códigos de Televendas não batem entre a tabela de Faturamento e a tabela de Meta.")
+    #                 st.write(f"**Códigos que faturaram (Amostra):** {list(chaves_fat)[:10]}")
+    #                 st.write(f"**Códigos na Meta (Amostra):** {list(chaves_meta)[:10]}")
+    #             else:
+    #                 st.success(f"✅ Códigos se cruzaram perfeitamente ({len(chaves_comuns)} em comum).")
+    # ------------------------------------------------------------------
+
     df_kpi = pd.merge(meta_agg, fat_agg, on=[chave, 'data'], how='left')
     df_kpi['valor_venda_mes'] = df_kpi['valor_venda_mes'].fillna(0)
     
