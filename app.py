@@ -190,11 +190,12 @@ def gerar_html_resumo(df_acumulado):
     </style>
     """
     html = f"{css}<div class='kpi-grid'>"
-    df_ordenado = df_acumulado.sort_values(by='filial_kpi')
     
-    for filial, group in df_ordenado.groupby('filial_kpi'):
-        try: num_filial = int(filial)
-        except ValueError: num_filial = filial
+    # 1. Pré-Agregação de Métricas por Filial
+    lista_filiais = []
+    for filial, group in df_acumulado.groupby('filial_kpi'):
+        try: num_filial = int(float(filial))
+        except ValueError: num_filial = str(filial).replace('.0', '')
             
         total_entidades = len(group)
         na_meta = len(group[group['atingimento'] >= 1.0])
@@ -203,18 +204,41 @@ def gerar_html_resumo(df_acumulado):
         meta_global = group['meta_total'].sum()
         fat_global = group['fat_total'].sum()
         ating_global = fat_global / meta_global if meta_global > 0 else 0
-        _, text_class, icone = obter_cores_kpi(ating_global)
         
+        lista_filiais.append({
+            'num_filial': num_filial,
+            'total_entidades': total_entidades,
+            'na_meta': na_meta,
+            'pct_na_meta': pct_na_meta,
+            'meta_global': meta_global,
+            'fat_global': fat_global,
+            'ating_global': ating_global
+        })
+        
+    # 2. Conversão e Ordenação (Ranking por Volume de Entidades na Meta)
+    df_resumo = pd.DataFrame(lista_filiais)
+    if not df_resumo.empty:
+        df_resumo = df_resumo.sort_values(by=['pct_na_meta', 'ating_global'], ascending=[False, False])
+        
+    # 3. Motor de Renderização HTML
+    for _, row in df_resumo.iterrows():
+        _, text_class, icone = obter_cores_kpi(row['ating_global'])
+        
+        # Sanitização forçada: corta os dois últimos caracteres se terminar em '.0'
+        filial_str = str(row['num_filial'])
+        if filial_str.endswith('.0'):
+            filial_str = filial_str[:-2]
+            
         html += f"""
         <div class='kpi-card'>
-            <div class='kpi-title'>🏢 Filial {num_filial}</div>
-            <div class='kpi-value'>{pct_na_meta:.0%}</div>
-            <div class='kpi-sub'><strong>{na_meta}</strong> de {total_entidades} atingiram >= 100%</div>
+            <div class='kpi-title'>🏢 Filial {filial_str}</div>
+            <div class='kpi-value'>{row['pct_na_meta']:.0%}</div>
+            <div class='kpi-sub'><strong>{row['na_meta']}</strong> de {row['total_entidades']} atingiram >= 100%</div>
             <div class='divider'></div>
             <div class='kpi-sub' style='margin-bottom: 8px;'>Desempenho Financeiro</div>
-            <div class='kpi-value {text_class}' style='font-size: 22px; margin-bottom: 8px;'>{icone} {ating_global:.0%}</div>
-            <div class='kpi-sub'>Meta: <strong>R$ {formata_br(meta_global)}</strong></div>
-            <div class='kpi-sub'>Real: <strong>R$ {formata_br(fat_global)}</strong></div>
+            <div class='kpi-value {text_class}' style='font-size: 22px; margin-bottom: 8px;'>{icone} {row['ating_global']:.0%}</div>
+            <div class='kpi-sub'>Meta: <strong>R$ {formata_br(row['meta_global'])}</strong></div>
+            <div class='kpi-sub'>Real: <strong>R$ {formata_br(row['fat_global'])}</strong></div>
         </div>
         """
     html += "</div>"
