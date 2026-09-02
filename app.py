@@ -138,7 +138,8 @@ def processar_kpis(df_fato_base, df_meta_base, df_dim_atual, visao):
 
     fat_agg = fat_filtrado.groupby([chave, 'data'])['valor_realizado'].sum().reset_index()
     meta_agg = df_meta_atual.groupby([chave, 'data'])['valor_meta'].sum().reset_index()
-    
+
+    #Diagnóstico ###################################################################################################
     with st.expander(f"🛠️ AUTO-DIAGNÓSTICO: (Visão: {visao})", expanded=False):
         if df_fato_base.empty: st.error("❌ ERRO 0: Filtro de Mês vazio.")
         elif fat_filtrado.empty: st.error("❌ ERRO 1: Origem/Filtro não bateu.")
@@ -228,12 +229,20 @@ def gerar_html_resumo(df_acumulado):
         filial_str = str(row['num_filial'])
         if filial_str.endswith('.0'):
             filial_str = filial_str[:-2]
+
+        na_meta_str = str(row['na_meta'])
+        if na_meta_str.endswith('.0'):
+            na_meta_str = na_meta_str[:-2]
+
+        total_entidades_str = str(row['total_entidades'])
+        if total_entidades_str.endswith('.0'):
+            total_entidades_str = total_entidades_str[:-2]
             
         html += f"""
         <div class='kpi-card'>
             <div class='kpi-title'>🏢 Filial {filial_str}</div>
             <div class='kpi-value'>{row['pct_na_meta']:.0%}</div>
-            <div class='kpi-sub'><strong>{row['na_meta']}</strong> de {row['total_entidades']} atingiram >= 100%</div>
+            <div class='kpi-sub'><strong>{na_meta_str}</strong> de {total_entidades_str} atingiram >= 100%</div>
             <div class='divider'></div>
             <div class='kpi-sub' style='margin-bottom: 8px;'>Desempenho Financeiro</div>
             <div class='kpi-value {text_class}' style='font-size: 22px; margin-bottom: 8px;'>{icone} {row['ating_global']:.0%}</div>
