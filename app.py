@@ -99,7 +99,7 @@ def carregar_dados():
 # ==========================================
 def processar_kpis(df_fato_base, df_meta_base, df_dim_atual, visao):
     if visao == "RCA":
-        origens_validas = ['FORÇA DE VENDAS', 'OPERADOR LOGÍSTICO', 'E-COMMERCE', 'PEDIDO ELETRÔNICO']
+        origens_validas = ['FORÇA DE VENDAS', 'OPERADOR LOGÍSTICO', 'E-COMMERCE', 'PEDIDO ELETRÔNICO', 'TELEMARKETING']
         chave = 'cod_rca'
         nome_col = 'nm_rca'
     else:
