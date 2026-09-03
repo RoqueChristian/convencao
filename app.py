@@ -356,6 +356,8 @@ def main():
         st.session_state.visao_ativa = "RCA"
     if 'indicador_ativo' not in st.session_state:
         st.session_state.indicador_ativo = "FATURAMENTO"
+    if 'ranking_ordem' not in st.session_state:
+        st.session_state.ranking_ordem = "DESC"
 
     st.title("Dashboard Analítico: Acompanhamento de Metas")
     
@@ -507,7 +509,18 @@ def main():
             components.html(html_mensal, height=700, scrolling=True)
             
         with tab_ranking:
-            html_ranking = gerar_html_ranking(df_acumulado)
+            col_ord1, col_ord2, _ = st.columns([1, 1, 4])
+            with col_ord1:
+                if st.button("🔽 Maior para Menor", use_container_width=True, type="primary" if st.session_state.ranking_ordem == "DESC" else "secondary"):
+                    st.session_state.ranking_ordem = "DESC"
+                    st.rerun()
+            with col_ord2:
+                if st.button("🔼 Menor para Maior", use_container_width=True, type="primary" if st.session_state.ranking_ordem == "ASC" else "secondary"):
+                    st.session_state.ranking_ordem = "ASC"
+                    st.rerun()
+
+            df_ranking = df_acumulado.sort_values(by='atingimento', ascending=(st.session_state.ranking_ordem == "ASC")).reset_index(drop=True)
+            html_ranking = gerar_html_ranking(df_ranking)
             components.html(html_ranking, height=950, scrolling=True)
 
 if __name__ == "__main__":
