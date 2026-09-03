@@ -8,7 +8,7 @@ import streamlit.components.v1 as components
 # ==========================================
 st.set_page_config(page_title="Dashboard Analítico - Metas", layout="wide", initial_sidebar_state="collapsed")
 
-@st.cache_data
+#@st.cache_data
 def carregar_dados():
     base_path = "data"
     
