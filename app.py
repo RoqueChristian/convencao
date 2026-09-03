@@ -324,7 +324,10 @@ def gerar_html_ranking(df):
     
     for idx, row in df.iterrows():
         entidade, meta, fat, ating = row['nome_entidade'], row['meta_total'], row['fat_total'], row['atingimento']
-        rank = idx + 1
+        # Usa a posição real (calculada antes de qualquer reordenação para exibição),
+        # para que o número/medalha continue vinculado ao desempenho verdadeiro
+        # mesmo quando a lista é exibida do menor para o maior.
+        rank = row['posicao'] if 'posicao' in df.columns else idx + 1
         
         if rank == 1: pos_visual = "🥇"
         elif rank == 2: pos_visual = "🥈"
@@ -458,6 +461,7 @@ def main():
             lambda row: row['fat_total'] / row['meta_total'] if row['meta_total'] > 0 else 0, axis=1
         )
         df_acumulado = df_acumulado.sort_values(by='atingimento', ascending=False).reset_index(drop=True)
+        df_acumulado['posicao'] = df_acumulado.index + 1
 
         # Geração Dinâmica das Abas (Supervisor só aparece na visão RCA)
         if visao == "RCA":
