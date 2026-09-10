@@ -496,12 +496,40 @@ def main():
                 components.html(html_ranking_sup, height=950, scrolling=True)
                 
         else:
-            # Visão Televendas: Mantém as 3 Abas Originais
-            tab_resumo, tab_mensal, tab_ranking = st.tabs([
-                "📈 Resumo Executivo (Filiais)", 
-                "📅 Visão Mensal (Evolução)", 
-                "🏆 Ranking Acumulado"
+            # 1. Mapeia cod_televenda -> nome_supervisao a partir da própria planilha
+            #    de metas de televendas (coluna adicionada nela), já que não existe
+            #    uma dimensão de supervisão separada para essa visão.
+            dim_sup_televendas = df_meta_tv[['cod_televenda', 'nome_supervisao']].drop_duplicates(subset='cod_televenda')
+
+            # 2. Traz o nome da supervisão para a tabela base cruzando pelo código do operador
+            df_kpi_sup_tv = pd.merge(df_kpi, dim_sup_televendas, on='cod_televenda', how='left')
+            df_kpi_sup_tv['nome_supervisao'] = df_kpi_sup_tv['nome_supervisao'].fillna('SEM SUPERVISÃO')
+
+            # 3. Agrupa a performance inteira na figura da Supervisão
+            df_sup_tv = df_kpi_sup_tv.groupby('nome_supervisao').agg(
+                meta_total=('valor_meta', 'sum'),
+                fat_total=('valor_realizado', 'sum')
+            ).reset_index()
+
+            df_sup_tv['atingimento'] = df_sup_tv.apply(
+                lambda row: row['fat_total'] / row['meta_total'] if row['meta_total'] > 0 else 0, axis=1
+            )
+            df_sup_tv = df_sup_tv.sort_values(by='atingimento', ascending=False).reset_index(drop=True)
+
+            # Renomeia para 'nome_entidade' para reutilizar o motor de HTML já existente
+            df_sup_tv.rename(columns={'nome_supervisao': 'nome_entidade'}, inplace=True)
+
+            # Visão Televendas: agora com 4 Abas (Supervisão incluída)
+            tab_resumo, tab_mensal, tab_ranking, tab_ranking_sup = st.tabs([
+                "📈 Resumo Executivo (Filiais)",
+                "📅 Visão Mensal (Evolução)",
+                "🏆 Ranking Acumulado",
+                "👥 Ranking de Supervisão"
             ])
+
+            with tab_ranking_sup:
+                html_ranking_sup = gerar_html_ranking(df_sup_tv)
+                components.html(html_ranking_sup, height=950, scrolling=True)
         
         # Renderização das Abas Compartilhadas
         with tab_resumo:
