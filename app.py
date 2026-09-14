@@ -8,10 +8,28 @@ import streamlit.components.v1 as components
 # ==========================================
 st.set_page_config(page_title="Dashboard Analítico - Metas", layout="wide", initial_sidebar_state="collapsed")
 
-#@st.cache_data
-def carregar_dados():
+def _assinatura_arquivos_dados(base_path="data"):
+    """Hora de modificação de cada arquivo de origem.
+
+    Passada como argumento para carregar_dados() para o cache invalidar
+    sozinho assim que qualquer arquivo for atualizado no disco. Sem isso,
+    a escolha era entre: cache (rápido, mas ignora atualizações de arquivo)
+    ou sem cache (sempre atual, mas relê ~10 arquivos do disco a cada clique,
+    levando ~3s por interação e dando a impressão de que os filtros "travam").
+    """
+    nomes = [
+        "faturamento_realizado.xlsx", "meta_faturamento.xlsx", "dim_rca.xlsx",
+        "dim_filial.xlsx", "dim_supervisor.xlsx", "meta_faturamento_televendas.xlsx",
+        "dim_televendas.xlsx", "marcas_meta.csv", "marcas_realizado.csv",
+        "meta_marcas_televendas.xlsx",
+    ]
+    return tuple(os.path.getmtime(os.path.join(base_path, nome)) for nome in nomes)
+
+
+@st.cache_data(show_spinner="Carregando base de dados...")
+def carregar_dados(assinatura):
     base_path = "data"
-    
+
     # 1. Ingestão Faturamento e Dimensões
     df_fat = pd.read_excel(os.path.join(base_path, "faturamento_realizado.xlsx"))
     df_meta = pd.read_excel(os.path.join(base_path, "meta_faturamento.xlsx"))
@@ -20,13 +38,14 @@ def carregar_dados():
     df_supervisor = pd.read_excel(os.path.join(base_path, "dim_supervisor.xlsx"))
     df_meta_televendas = pd.read_excel(os.path.join(base_path, "meta_faturamento_televendas.xlsx"))
     df_televendas = pd.read_excel(os.path.join(base_path, "dim_televendas.xlsx"))
-    
+
     # 1.1 Ingestão Marcas Exclusivas
     df_marcas_meta = pd.read_csv(os.path.join(base_path, "marcas_meta.csv"), sep=';', decimal=',', encoding='utf-8-sig')
     df_marcas_realizado = pd.read_csv(os.path.join(base_path, "marcas_realizado.csv"), sep=';', decimal=',', encoding='utf-8-sig')
-    
+    df_marcas_meta_televendas = pd.read_excel(os.path.join(base_path, "meta_marcas_televendas.xlsx"))
+
     # 2. Sanitização Universal
-    dfs_todas = [df_fat, df_meta, df_rca, df_filial, df_supervisor, df_meta_televendas, df_televendas, df_marcas_meta, df_marcas_realizado]
+    dfs_todas = [df_fat, df_meta, df_rca, df_filial, df_supervisor, df_meta_televendas, df_televendas, df_marcas_meta, df_marcas_realizado, df_marcas_meta_televendas]
     for df in dfs_todas:
         df.columns = [str(c).strip().lower() for c in df.columns]
         
@@ -45,6 +64,7 @@ def carregar_dados():
         
     df_meta_televendas.rename(columns={'cod_televendas': 'cod_televenda', 'valor_mea_televendas': 'valor_meta'}, inplace=True)
     df_marcas_meta.rename(columns={'valor_meta_exclusivas': 'valor_meta'}, inplace=True)
+    df_marcas_meta_televendas.rename(columns={'valor_meta_marcas': 'valor_meta'}, inplace=True)
     
     # ==========================================
     # 🛡️ DATA QUALITY & TYPE CASTING
@@ -59,7 +79,7 @@ def carregar_dados():
     for df_temp in [df_fat, df_marcas_realizado]:
         garantir_numerico(df_temp, 'valor_realizado')
         
-    for df_temp in [df_meta, df_meta_televendas, df_marcas_meta]:
+    for df_temp in [df_meta, df_meta_televendas, df_marcas_meta, df_marcas_meta_televendas]:
         garantir_numerico(df_temp, 'valor_meta')
 
     # 4.2 Blindagem de Strings
@@ -79,7 +99,8 @@ def carregar_dados():
     # 5. Transformação Temporal Adaptativa
     dicionario_tabelas = {
         "Faturamento": df_fat, "Meta RCA": df_meta, "Meta Televendas": df_meta_televendas,
-        "Marcas Realizado": df_marcas_realizado, "Marcas Meta": df_marcas_meta
+        "Marcas Realizado": df_marcas_realizado, "Marcas Meta": df_marcas_meta,
+        "Marcas Meta Televendas": df_marcas_meta_televendas
     }
     
     for nome, df_temp in dicionario_tabelas.items():
@@ -92,7 +113,7 @@ def carregar_dados():
         else:
             df_temp['data'] = pd.to_datetime(df_temp['data'], errors='coerce').dt.to_period('M')
     
-    return df_fat, df_meta, df_rca, df_filial, df_supervisor, df_meta_televendas, df_televendas, df_marcas_meta, df_marcas_realizado
+    return df_fat, df_meta, df_rca, df_filial, df_supervisor, df_meta_televendas, df_televendas, df_marcas_meta, df_marcas_realizado, df_marcas_meta_televendas
 
 # ==========================================
 # 2. Motor de Regras de Negócio (ETL)
@@ -174,7 +195,7 @@ def obter_cores_kpi(ating):
     elif ating >= 0.8: return "var(--neon-blue)", "text-warning", "🟦"
     else: return "var(--neon-pink)", "text-danger", "🟪"
 
-def gerar_html_resumo(df_acumulado):
+def gerar_html_resumo(df_acumulado, rotulo_entidade="RCA"):
     css = """
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -188,10 +209,31 @@ def gerar_html_resumo(df_acumulado):
         .kpi-sub { color: var(--text-muted); font-size: 13px; font-weight: 500; margin-bottom: 4px; }
         .divider { width: 100%; border-top: 1px solid rgba(255,255,255,0.08); margin: 16px 0; }
         .text-success { color: var(--neon-green); } .text-warning { color: var(--neon-blue); } .text-danger { color: var(--neon-pink); }
+        .card-destaque { background: linear-gradient(135deg, rgba(52,211,153,0.16), rgba(22,25,37,1) 65%); border: 1px solid rgba(52,211,153,0.4); border-radius: 16px; padding: 24px 28px; display: flex; align-items: center; gap: 24px; width: 100%; box-sizing: border-box; margin-bottom: 20px; box-shadow: 0 4px 20px -6px rgba(52,211,153,0.3); flex-wrap: wrap; }
+        .destaque-icone { font-size: 44px; line-height: 1; }
+        .destaque-valor { color: var(--neon-green); font-size: 42px; font-weight: 800; line-height: 1; }
+        .destaque-label { color: var(--text-main); font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 6px; }
+        .destaque-sub { margin-left: auto; color: var(--text-muted); font-size: 13px; font-weight: 600; text-align: right; }
     </style>
     """
-    html = f"{css}<div class='kpi-grid'>"
-    
+
+    # Totalizador: quantidade de entidades (RCA/Televendas) que bateram >= 100%
+    # da meta no período filtrado, somando todas as filiais -- indica quem
+    # está indo para a convenção.
+    total_geral = len(df_acumulado)
+    total_indo_convencao = len(df_acumulado[df_acumulado['atingimento'] >= 1.0])
+
+    html = f"""{css}
+    <div class='card-destaque'>
+        <div class='destaque-icone'>🏆</div>
+        <div>
+            <div class='destaque-valor'>{total_indo_convencao}</div>
+            <div class='destaque-label'>{rotulo_entidade} indo para a Convenção</div>
+        </div>
+        <div class='destaque-sub'>{total_indo_convencao} de {total_geral} atingiram &ge; 100% da meta</div>
+    </div>
+    <div class='kpi-grid'>"""
+
     # 1. Pré-Agregação de Métricas por Filial
     lista_filiais = []
     for filial, group in df_acumulado.groupby('filial_kpi'):
@@ -354,6 +396,20 @@ def gerar_html_ranking(df):
 # ==========================================
 # 4. Orquestração da Aplicação (UI/UX)
 # ==========================================
+def _definir_estado(chave, valor):
+    """Callback de clique dos botões de alternância (indicador/visão/ordem).
+
+    Usar `on_click` em vez de `if st.button(...): st.session_state.x = ...; st.rerun()`
+    evita dois problemas do `st.rerun()` explícito: (1) ele corrompe o valor de
+    widgets declarados mais adiante no script (ex.: os multiselects de filtro
+    perdiam a seleção ao trocar de visão), e (2) o próprio botão clicado só
+    aparecia destacado (type="primary") um clique depois. Um callback roda
+    antes do rerun natural do clique, então o session_state já está atualizado
+    quando o script é reexecutado -- sem precisar de rerun manual.
+    """
+    st.session_state[chave] = valor
+
+
 def main():
     if 'visao_ativa' not in st.session_state:
         st.session_state.visao_ativa = "RCA"
@@ -364,35 +420,31 @@ def main():
 
     st.title("Dashboard Analítico: Acompanhamento de Metas")
     
-    df_fat, df_meta, df_rca, df_filial, df_supervisor, df_meta_tv, df_televendas, df_marcas_meta, df_marcas_realizado = carregar_dados()
+    df_fat, df_meta, df_rca, df_filial, df_supervisor, df_meta_tv, df_televendas, df_marcas_meta, df_marcas_realizado, df_marcas_meta_tv = carregar_dados(_assinatura_arquivos_dados())
     
     # ------------------ TOP BAR: SELEÇÃO DE INDICADOR ------------------
     st.markdown("### 🎯 Seleção de Indicador")
     col_ind1, col_ind2, _ = st.columns([1, 1, 4])
     
     with col_ind1:
-        if st.button("💰 Faturamento Geral", use_container_width=True, type="primary" if st.session_state.indicador_ativo == "FATURAMENTO" else "secondary"):
-            st.session_state.indicador_ativo = "FATURAMENTO"
-            st.rerun()
+        st.button("💰 Faturamento Geral", use_container_width=True, type="primary" if st.session_state.indicador_ativo == "FATURAMENTO" else "secondary",
+                   on_click=_definir_estado, args=("indicador_ativo", "FATURAMENTO"))
     with col_ind2:
-        if st.button("🏷️ Marcas Exclusivas", use_container_width=True, type="primary" if st.session_state.indicador_ativo == "MARCAS" else "secondary"):
-            st.session_state.indicador_ativo = "MARCAS"
-            st.rerun()
-            
+        st.button("🏷️ Marcas Exclusivas", use_container_width=True, type="primary" if st.session_state.indicador_ativo == "MARCAS" else "secondary",
+                   on_click=_definir_estado, args=("indicador_ativo", "MARCAS"))
+
     # ------------------ TOP BAR: SELEÇÃO DE VISÃO ------------------
     st.markdown("### 📊 Visão Hierárquica")
     col_btn1, col_btn2, _ = st.columns([1, 1, 4])
-    
+
     with col_btn1:
-        if st.button("💼 Visão RCA", use_container_width=True, type="primary" if st.session_state.visao_ativa == "RCA" else "secondary"):
-            st.session_state.visao_ativa = "RCA"
-            st.rerun()
-            
+        st.button("💼 Visão RCA", use_container_width=True, type="primary" if st.session_state.visao_ativa == "RCA" else "secondary",
+                   on_click=_definir_estado, args=("visao_ativa", "RCA"))
+
     with col_btn2:
-        if st.button("🎧 Visão Televendas", use_container_width=True, type="primary" if st.session_state.visao_ativa == "TELEVENDAS" else "secondary"):
-            st.session_state.visao_ativa = "TELEVENDAS"
-            st.rerun()
-            
+        st.button("🎧 Visão Televendas", use_container_width=True, type="primary" if st.session_state.visao_ativa == "TELEVENDAS" else "secondary",
+                   on_click=_definir_estado, args=("visao_ativa", "TELEVENDAS"))
+
     st.markdown("---")
     
     visao = st.session_state.visao_ativa
@@ -403,7 +455,7 @@ def main():
         df_meta_base = df_meta if visao == "RCA" else df_meta_tv
     else:
         df_fato_ativo = df_marcas_realizado
-        df_meta_base = df_marcas_meta  
+        df_meta_base = df_marcas_meta if visao == "RCA" else df_marcas_meta_tv
     
     # ------------------ FILTROS GLOBAIS ------------------
     st.markdown("### 🔍 Filtros Analíticos")
@@ -413,26 +465,41 @@ def main():
 
     if visao == "RCA":
         col_f1, col_f2, col_f3, col_f4 = st.columns(4)
-        with col_f1: filiais_selecionadas = st.multiselect("📌 Filial (Código)", lista_filiais)
-        with col_f2: meses_selecionados = st.multiselect("📅 Mês", lista_meses)
-        with col_f3: sups_selecionados = st.multiselect("👥 Supervisor", sorted(df_supervisor['nm_supervisor'].dropna().unique().tolist()))
-        with col_f4: rcas_selecionados = st.multiselect("💼 RCA", sorted(df_rca['nm_rca'].dropna().unique().tolist()))
-            
+        with col_f1: filiais_selecionadas = st.multiselect("📌 Filial (Código)", lista_filiais, key="filtro_filial")
+        with col_f2: meses_selecionados = st.multiselect("📅 Mês", lista_meses, key="filtro_mes")
+        with col_f3: sups_selecionados = st.multiselect("👥 Supervisor", sorted(df_supervisor['nm_supervisor'].dropna().unique().tolist()), key="filtro_supervisor")
+        with col_f4: rcas_selecionados = st.multiselect("💼 RCA", sorted(df_rca['nm_rca'].dropna().unique().tolist()), key="filtro_rca")
+
         df_dim_filtrada = df_rca.copy()
-        
+
         if filiais_selecionadas: df_dim_filtrada = df_dim_filtrada[df_dim_filtrada['cod_filial'].isin(filiais_selecionadas)]
         if sups_selecionados: df_dim_filtrada = df_dim_filtrada[df_dim_filtrada['cod_supervisor'].isin(df_supervisor[df_supervisor['nm_supervisor'].isin(sups_selecionados)]['cod_supervisor'].tolist())]
         if rcas_selecionados: df_dim_filtrada = df_dim_filtrada[df_dim_filtrada['nm_rca'].isin(rcas_selecionados)]
         df_meta_atual = df_meta_base.copy()
-        
-    else: 
+
+    else:
         col_f1, col_f2, col_f3 = st.columns(3)
-        with col_f1: filiais_selecionadas = st.multiselect("📌 Filial (Código)", lista_filiais)
-        with col_f2: meses_selecionados = st.multiselect("📅 Mês", lista_meses)
-        with col_f3: tvs_selecionados = st.multiselect("🎧 Operador de Televendas", sorted(df_televendas['nm_televenda'].dropna().unique().tolist()))
+        with col_f1: filiais_selecionadas = st.multiselect("📌 Filial (Código)", lista_filiais, key="filtro_filial")
+        with col_f2: meses_selecionados = st.multiselect("📅 Mês", lista_meses, key="filtro_mes")
+        with col_f3: tvs_selecionados = st.multiselect("🎧 Operador de Televendas", sorted(df_televendas['nm_televenda'].dropna().unique().tolist()), key="filtro_operador_televendas")
             
         df_dim_filtrada = df_televendas.copy()
-        
+
+        # Para Televendas, a filial passa a seguir o cadastro feito diretamente
+        # na planilha de meta ativa (cod_filial), que é a fonte mais atualizada.
+        # A dim_televendas pode estar desatualizada para alguns operadores
+        # (sua filial só é usada como fallback, quando o operador não tem meta).
+        if 'cod_filial' in df_meta_base.columns:
+            mapa_filial_meta = (
+                df_meta_base[['cod_televenda', 'cod_filial']]
+                .dropna()
+                .drop_duplicates(subset='cod_televenda')
+                .set_index('cod_televenda')['cod_filial']
+            )
+            df_dim_filtrada['filial'] = (
+                df_dim_filtrada['cod_televenda'].map(mapa_filial_meta).fillna(df_dim_filtrada['filial']).astype(int)
+            )
+
         if filiais_selecionadas: df_dim_filtrada = df_dim_filtrada[df_dim_filtrada['filial'].isin(filiais_selecionadas)]
         if tvs_selecionados: df_dim_filtrada = df_dim_filtrada[df_dim_filtrada['nm_televenda'].isin(tvs_selecionados)]
         df_meta_atual = df_meta_base.copy()
@@ -533,8 +600,9 @@ def main():
         
         # Renderização das Abas Compartilhadas
         with tab_resumo:
-            html_resumo = gerar_html_resumo(df_acumulado)
-            components.html(html_resumo, height=800, scrolling=True)
+            rotulo_entidade = "RCAs" if visao == "RCA" else "Televendas"
+            html_resumo = gerar_html_resumo(df_acumulado, rotulo_entidade)
+            components.html(html_resumo, height=880, scrolling=True)
 
         with tab_mensal:
             html_mensal = gerar_html_matriz(df_kpi)
@@ -543,13 +611,11 @@ def main():
         with tab_ranking:
             col_ord1, col_ord2, _ = st.columns([1, 1, 4])
             with col_ord1:
-                if st.button("🔽 Maior para Menor", use_container_width=True, type="primary" if st.session_state.ranking_ordem == "DESC" else "secondary"):
-                    st.session_state.ranking_ordem = "DESC"
-                    st.rerun()
+                st.button("🔽 Maior para Menor", use_container_width=True, type="primary" if st.session_state.ranking_ordem == "DESC" else "secondary",
+                          on_click=_definir_estado, args=("ranking_ordem", "DESC"))
             with col_ord2:
-                if st.button("🔼 Menor para Maior", use_container_width=True, type="primary" if st.session_state.ranking_ordem == "ASC" else "secondary"):
-                    st.session_state.ranking_ordem = "ASC"
-                    st.rerun()
+                st.button("🔼 Menor para Maior", use_container_width=True, type="primary" if st.session_state.ranking_ordem == "ASC" else "secondary",
+                          on_click=_definir_estado, args=("ranking_ordem", "ASC"))
 
             df_ranking = df_acumulado.sort_values(by='atingimento', ascending=(st.session_state.ranking_ordem == "ASC")).reset_index(drop=True)
             html_ranking = gerar_html_ranking(df_ranking)
